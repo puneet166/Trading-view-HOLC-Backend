@@ -1,16 +1,18 @@
 const rateLimit = require("express-rate-limit");
-const RedisStore = require("rate-limit-redis");
+const { RedisStore } = require("rate-limit-redis");
 const redis = require("../config/redis");
 
-const createLimiter = (max, windowMs) =>
-  rateLimit({
-    store: new RedisStore({
-      sendCommand: (...args) => redis.call(...args),
-    }),
+function createLimiter(max, windowMs) {
+  return rateLimit({
     windowMs,
     max,
     standardHeaders: true,
     legacyHeaders: false,
+
+    store: new RedisStore({
+      sendCommand: (...args) => redis.call(...args),
+    }),
+
     handler: (req, res) => {
       res.status(429).json({
         error: "Too many requests",
@@ -18,8 +20,9 @@ const createLimiter = (max, windowMs) =>
       });
     },
   });
+}
 
 module.exports = {
-  historyLimiter: createLimiter(60, 60 * 1000),
-  symbolLimiter: createLimiter(30, 60 * 1000),
+  historyLimiter: createLimiter(60, 60 * 1000), // 60 req/min
+  symbolLimiter: createLimiter(30, 60 * 1000),  // 30 req/min
 };

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>WS Test</title>
+  </head>
+  <body>
+    <h2>WebSocket Test</h2>
+    <pre id="log"></pre>
+
+    <script>
+      const log = msg => {
+        document.getElementById("log").textContent += msg + "\n";
+      };
+
+      const ws = new WebSocket("ws://localhost");
+
+      ws.onopen = () => {
+        log("WS connected");
+        ws.send(JSON.stringify({
+          type: "subscribe",
+          symbol: "BTCUSDT",
+          timeframe: "1m"
+        }));
+      };
+
+      ws.onmessage = e => {
+        log("CANDLE: " + e.data);
+      };
+
+      ws.onerror = e => {
+        log("WS error");
+      };
+    </script>
+  </body>
+</html>
