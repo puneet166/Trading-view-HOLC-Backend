@@ -1,4 +1,6 @@
 require("dotenv").config();
+require("./workers/candle.worker");
+
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
@@ -11,6 +13,8 @@ const startExchangeStreams = require("./ws");
 connectDB();
 
 const app = express();
+app.set("trust proxy", 1);
+
 app.use(cors());
 app.use("/tv", tvRoutes);
 

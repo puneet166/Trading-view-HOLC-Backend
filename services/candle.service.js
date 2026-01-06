@@ -8,10 +8,6 @@ const { acquireLock, releaseLock } = require("../utils/locks");
  */
 const resolutionMap = {
   "1": "1m",
-  "5": "5m",
-  "15": "15m",
-  "60": "1h",
-  "1D": "1d",
 };
 
 /**
@@ -26,63 +22,129 @@ async function fetchAndSave(symbol, resolution, since) {
   if (!symbolConfig) return;
 
   const lockKey = `fetch:${symbol}:${timeframe}`;
-
-  // 🔒 Acquire distributed lock
-  const locked = await acquireLock(lockKey, 10000); // 10 sec lock
-  if (!locked) {
-    // Another request/worker is already fetching
-    return;
-  }
+  const locked = await acquireLock(lockKey, 10000);
+  if (!locked) return;
 
   try {
-    const ohlcv = await exchange.fetchOHLCV(
-      symbolConfig.exchangeSymbol, // e.g. BTC/USDT
-      timeframe,
-      since,
-      500
-    );
+    let from = since;
+    const limit = 500;
 
-    if (!ohlcv || !ohlcv.length) return;
+    while (true) {
+      const ohlcv = await exchange.fetchOHLCV(
+        symbolConfig.exchangeSymbol,
+        timeframe,
+        from,
+        limit
+      );
 
-    const bulkOps = ohlcv.map(candle => {
-      const time = Math.floor(candle[0] / 1000);
+      if (!ohlcv || ohlcv.length === 0) break;
 
-      return {
+      const bulkOps = ohlcv.map(c => {
+        const time = Math.floor(c[0] / 1000);
+
+        return {
+          updateOne: {
+            filter: { symbol, timeframe, time },
+            update: {
+              $set: {
+                symbol,
+                timeframe,
+                time,
+                open: c[1],
+                high: c[2],
+                low: c[3],
+                close: c[4],
+                volume: c[5],
+              },
+            },
+            upsert: true,
+          },
+        };
+      });
+
+      await Candle.bulkWrite(bulkOps, { ordered: false });
+
+      // move forward in time
+      from = ohlcv[ohlcv.length - 1][0] + 1;
+
+      // stop if less than limit (no more data)
+      if (ohlcv.length < limit) break;
+    }
+  } catch (err) {
+    console.error("fetchAndSave error:", err.message);
+  } finally {
+    await releaseLock(lockKey);
+  }
+}
+async function backfillSymbol(symbol, days = 30) {
+  const timeframe = "1m";
+  const symbolConfig = symbols.find(s => s.symbol === symbol);
+  if (!symbolConfig) return;
+
+  const limit = 500;
+  const now = Date.now();
+  let since = now - days * 24 * 60 * 60 * 1000;
+
+  console.log(`🔁 Backfilling ${symbol} for ${days} days`);
+
+  while (since < now) {
+    try {
+      const ohlcv = await exchange.fetchOHLCV(
+        symbolConfig.exchangeSymbol,
+        timeframe,
+        since,
+        limit
+      );
+
+      if (!ohlcv || ohlcv.length === 0) break;
+
+      const bulkOps = ohlcv.map(c => ({
         updateOne: {
           filter: {
             symbol,
             timeframe,
-            time,
+            time: Math.floor(c[0] / 1000),
           },
           update: {
             $set: {
               symbol,
               timeframe,
-              time,
-              open: candle[1],
-              high: candle[2],
-              low: candle[3],
-              close: candle[4],
-              volume: candle[5],
+              time: Math.floor(c[0] / 1000),
+              open: c[1],
+              high: c[2],
+              low: c[3],
+              close: c[4],
+              volume: c[5],
             },
           },
           upsert: true,
         },
-      };
-    });
+      }));
 
-    // ⚡ Bulk write for performance
-    await Candle.bulkWrite(bulkOps, { ordered: false });
+      await Candle.bulkWrite(bulkOps, { ordered: false });
 
-  } catch (err) {
-    console.error("fetchAndSave error:", err.message);
-  } finally {
-    // 🔓 Always release lock
-    await releaseLock(lockKey);
+      since = ohlcv[ohlcv.length - 1][0] + 1;
+
+      console.log(
+        `✅ ${symbol} → saved ${ohlcv.length} candles up to ${new Date(since).toISOString()}`
+      );
+
+      // 🛑 VERY IMPORTANT: avoid Binance rate limits
+      await new Promise(res => setTimeout(res, 300));
+
+    } catch (err) {
+      console.error(`❌ Backfill error for ${symbol}:`, err.message);
+      await new Promise(res => setTimeout(res, 1000));
+    }
   }
+
+  console.log(`🎉 Backfill complete for ${symbol}`);
 }
+
 
 module.exports = {
   fetchAndSave,
+  backfillSymbol,
   resolutionMap,
 };
+

@@ -62,52 +62,90 @@ router.get("/symbols/resolve",symbolLimiter, (req, res) => {
 });
 
 /**
- * History (Candles)
+ * History (TradingView compatible)
+ * Aggregates candles from 1m base timeframe
  */
-router.get("/history",historyLimiter, async (req, res) => {
-  const { symbol, resolution, from, to } = req.query;
-  const timeframe = resolutionMap[resolution];
+router.get("/history", historyLimiter, async (req, res) => {
+    console.log("HISTORY QUERY:", req.query);
 
-  if (!timeframe) {
-    return res.json({ s: "no_data" });
+  try {
+    const { symbol, resolution, from, to } = req.query;
+
+    if (!symbol || !resolution || !from || !to) {
+      return res.json({ s: "no_data" });
+    }
+
+    // 1️⃣ Always read 1-minute candles
+    const baseTimeframe = "1m";
+
+    const candles = await Candle.find({
+      symbol,
+      timeframe: baseTimeframe,
+      time: { $gte: Number(from), $lte: Number(to) },
+    }).sort({ time: 1 });
+
+    if (!candles.length) {
+      return res.json({ s: "no_data" });
+    }
+
+    // 2️⃣ Bucket alignment (TradingView strict)
+    function getBucketStart(time) {
+      if (resolution === "1") {
+        return time; // 1m stays same
+      }
+
+      if (resolution === "1D") {
+        return Math.floor(time / 86400) * 86400;
+      }
+
+      const minutes = parseInt(resolution);
+      return Math.floor(time / (minutes * 60)) * (minutes * 60);
+    }
+
+    // 3️⃣ Aggregate candles
+    const buckets = new Map();
+
+    for (const c of candles) {
+      const bucketTime = getBucketStart(c.time);
+
+      if (!buckets.has(bucketTime)) {
+        buckets.set(bucketTime, {
+          time: bucketTime,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+        });
+      } else {
+        const b = buckets.get(bucketTime);
+        b.high = Math.max(b.high, c.high);
+        b.low = Math.min(b.low, c.low);
+        b.close = c.close;
+        b.volume += c.volume;
+      }
+    }
+
+    // 4️⃣ Sort buckets
+    const result = Array.from(buckets.values()).sort(
+      (a, b) => a.time - b.time
+    );
+
+    // 5️⃣ TradingView response format
+    res.json({
+      s: "ok",
+      t: result.map(c => c.time),
+      o: result.map(c => c.open),
+      h: result.map(c => c.high),
+      l: result.map(c => c.low),
+      c: result.map(c => c.close),
+      v: result.map(c => c.volume),
+    });
+
+  } catch (err) {
+    console.error("History error:", err);
+    res.json({ s: "error" });
   }
-
-  const cacheKey = getCacheKey(symbol, timeframe, from, to);
-
-  // 1️⃣ Check Redis cache
-  const cached = await redis.get(cacheKey);
-  if (cached) {
-    return res.json(JSON.parse(cached));
-  }
-
-  // 2️⃣ Fetch missing candles (MongoDB auto-fill)
-  await fetchAndSave(symbol, resolution, from * 1000);
-
-  const candles = await Candle.find({
-    symbol,
-    timeframe,
-    time: { $gte: Number(from), $lte: Number(to) },
-  }).sort({ time: 1 });
-
-  if (!candles.length) {
-    return res.json({ s: "no_data" });
-  }
-
-  const response = {
-    s: "ok",
-    t: candles.map(c => c.time),
-    o: candles.map(c => c.open),
-    h: candles.map(c => c.high),
-    l: candles.map(c => c.low),
-    c: candles.map(c => c.close),
-    v: candles.map(c => c.volume),
-  };
-
-  // 3️⃣ Save to Redis (TTL = 30 seconds)
-  await redis.setex(cacheKey, 30, JSON.stringify(response));
-
-  res.json(response);
 });
-
 
 module.exports = router;
