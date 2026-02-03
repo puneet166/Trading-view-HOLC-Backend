@@ -11,7 +11,9 @@ services:
       - mongo
       - redis
     ports:
-      - "4000:4000"
+      - "4000:4000"        # ✅ ONLY backend exposed
+    networks:
+      - internal_net
 
   mongo:
     image: mongo:6
@@ -19,16 +21,26 @@ services:
     restart: always
     volumes:
       - mongo_data:/data/db
-    ports:
-      - "27017:27017"
+    networks:
+      - internal_net       # ❌ NO ports exposed
 
   redis:
     image: redis:7
     container_name: trading-redis
     restart: always
-    command: ["redis-server", "--appendonly", "no"]
-    ports:
-      - "6379:6379"
+    command:
+      [
+        "redis-server",
+        "--appendonly", "no",
+        "--bind", "0.0.0.0",
+        "--protected-mode", "no"
+      ]
+    networks:
+      - internal_net       # ❌ NO ports exposed
 
 volumes:
   mongo_data:
+
+networks:
+  internal_net:
+    driver: bridge

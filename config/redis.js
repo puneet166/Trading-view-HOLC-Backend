@@ -3,20 +3,21 @@ const Redis = require("ioredis");
 const redis = new Redis({
   host: process.env.REDIS_HOST,
   port: process.env.REDIS_PORT,
-   maxRetriesPerRequest: null,
-  enableReadyCheck: true,
-    retryStrategy(times) {
-    return Math.min(times * 100, 2000);
-  },
 
+  // 🔥 IMPORTANT FIXES
+  enableOfflineQueue: true,
+  maxRetriesPerRequest: 3,
+  retryStrategy(times) {
+    return Math.min(times * 200, 2000);
+  },
 });
 
 redis.on("connect", () => {
-  console.log("Redis Cluster connected");
+  console.log("Redis connected");
 });
 
 redis.on("error", err => {
-  console.error("Redis error", err);
+  console.error("Redis error", err.message);
 });
 
 module.exports = redis;

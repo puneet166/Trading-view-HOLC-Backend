@@ -1,5 +1,6 @@
 const cron = require("node-cron");
 require("dotenv").config();
+const Candle = require("../models/Candle");
 
 // 🔥 CONNECT TO MONGODB (THIS WAS MISSING)
 const connectDB = require("../config/db");
